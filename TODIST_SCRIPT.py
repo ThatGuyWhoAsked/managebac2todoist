@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""
-ManageBac → Todoist Sync Script
--------------------------------------------------------------------------------
-Downloads iCal events from ManageBac, filters the next 14 days, creates tasks
-in Todoist, and displays a formatted summary table with colours.
-"""
+"""ManageBac → Todoist Sync Script"""
 
 import sys
 import time
@@ -14,226 +9,158 @@ import requests
 from icalendar import Calendar
 from tqdm import tqdm
 
-# =============================================================================
-# CONFIGURATION – REPLACE THESE!
-# =============================================================================
+# ── Configuration ──────────────────────────────────────────────────────────────
 ICAL_URL = "https://ishamburg.managebac.com/student/events/token/47fdf330-2948-013c-d6a0-067aabdaee26.ics"
 TODOIST_API_KEY = "c4f2fb96f28963ed4efc8a9f523b87fe9c81c57f"
 DAYS_WINDOW = 14
-TODOIST_PROJECT_ID = None  # Optional: set to a project ID (int)
+PROJECT_ID = None
 
-# ANSI colour codes
-BLUE = "\033[94m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-RED = "\033[91m"
-RESET = "\033[0m"
-
-# Priority colours (used in the final table)
-PRIO_COLOUR = {1: RED, 2: YELLOW, 3: GREEN}
-
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
-def print_status(msg, colour=BLUE):
-    """Print a coloured status message."""
-    print(f"{colour}{msg}{RESET}")
+# ── Colours ────────────────────────────────────────────────────────────────────
+RED, YELLOW, GREEN, BLUE, RESET = (
+    "\033[91m",
+    "\033[93m",
+    "\033[92m",
+    "\033[94m",
+    "\033[0m",
+)
+PRIORITY_COLOUR = {1: RED, 2: YELLOW, 3: GREEN}
 
 
-def test_todoist_api(api_key):
-    """Verify that the Todoist API key is valid."""
-    try:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        resp = requests.get(
-            "https://api.todoist.com/api/v1/projects", headers=headers, timeout=10
-        )
-        resp.raise_for_status()
+def print_status(message, colour=BLUE):
+    print(f"{colour}{message}{RESET}")
+
+
+# ── Todoist helpers ────────────────────────────────────────────────────────────
+HEADERS = {
+    "Authorization": f"Bearer {TODOIST_API_KEY}",
+    "Content-Type": "application/json",
+}
+
+
+def test_api():
+    response = requests.get(
+        "https://api.todoist.com/api/v1/projects", headers=HEADERS, timeout=10
+    )
+    if response.ok:
         print_status("✓ Todoist API key is valid", GREEN)
         return True
-    except Exception as e:
-        print_status(f"✗ Todoist API test failed: {e}", RED)
-        return False
+    print_status(f"✗ API test failed: {response.status_code}", RED)
+    return False
 
 
-def download_calendar(url):
-    """Download iCal data from ManageBac."""
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        return resp.content
-    except requests.exceptions.RequestException as e:
-        print_status(f"Failed to download calendar: {e}", RED)
-        sys.exit(1)
-
-
-def parse_events(ical_data):
-    """Return a list of events with title, due_date, description, uid."""
-    cal = Calendar.from_ical(ical_data)
-    events = []
-    for component in cal.walk("VEVENT"):
-        title = str(component.get("SUMMARY", "No Title"))
-        due = component.get("DTSTART")
-        if due is None:
-            continue
-        dt_value = due.dt
-        due_date = dt_value.date() if isinstance(dt_value, datetime) else dt_value
-        description = str(component.get("DESCRIPTION", ""))
-        uid = str(component.get("UID", ""))
-        events.append(
-            {
-                "title": title,
-                "due_date": due_date,
-                "description": description,
-                "uid": uid,
-            }
-        )
-    return events
-
-
-def filter_events_by_date(events, window_days):
-    """Keep only events due within the next `window_days` (including today)."""
-    today = date.today()
-    cutoff = today + timedelta(days=window_days)
-    return [ev for ev in events if today <= ev["due_date"] <= cutoff]
-
-
-def days_until(due_date):
-    return (due_date - date.today()).days
-
-
-def assign_priority(days):
-    """Return Todoist priority (1=urgent, 2=high, 3=normal)."""
-    if days <= 2:
-        return 1
-    elif days <= 7:
-        return 2
-    else:
-        return 3
-
-
-def extract_subject_and_labels(title):
-    """
-    Extract a short subject name and optional labels (Summative/Formative).
-    Examples:
-        "Design (Va) Criterion D Report" -> subject "Design"
-        "Maths (MEs) Summative – Functions" -> subject "Maths", label "Summative"
-    """
-    lower_title = title.lower()
-    labels = []
-    if "summative" in lower_title:
-        labels.append("Summative")
-    if "formative" in lower_title:
-        labels.append("Formative")
-
-    # Try to get the subject: first word, or text before '('
-    subject = title.split()[0] if title.split() else "General"
-    if "(" in subject:
-        subject = subject.split("(")[0]
-    return subject, labels
-
-
-def create_todoist_task(
-    api_key, content, due_date_str, priority, labels, project_id=None
-):
-    """Create a task in Todoist. Returns True on success."""
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+def create_task(title, due_date, priority, labels):
     payload = {
-        "content": content,
-        "due_date": due_date_str,
+        "content": title,
+        "due_date": due_date,
         "priority": priority,
         "labels": labels,
     }
-    if project_id:
-        payload["project_id"] = project_id
-
-    try:
-        resp = requests.post(
-            "https://api.todoist.com/api/v1/tasks",
-            headers=headers,
-            json=payload,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        return True
-    except Exception as e:
-        print_status(f"Failed to create task '{content}': {e}", RED)
-        return False
+    if PROJECT_ID:
+        payload["project_id"] = PROJECT_ID
+    response = requests.post(
+        "https://api.todoist.com/api/v1/tasks",
+        headers=HEADERS,
+        json=payload,
+        timeout=10,
+    )
+    return response.ok
 
 
-# =============================================================================
-# MAIN SCRIPT
-# =============================================================================
-def main():
-    start_time = time.time()
-
-    # ---- Connecting & API test ----
-    print_status("Connecting to ManageBac iCal feed...")
-    print_status("Init. API call")
-    if not test_todoist_api(TODOIST_API_KEY):
+# ── Calendar helpers ───────────────────────────────────────────────────────────
+def download_events():
+    response = requests.get(ICAL_URL, timeout=15)
+    if not response.ok:
+        print_status("Failed to download calendar", RED)
         sys.exit(1)
 
-    # ---- Fetching events ----
-    print_status(f"Fetching events – next {DAYS_WINDOW} days")
-    ical_content = download_calendar(ICAL_URL)
+    today = date.today()
+    cutoff = today + timedelta(days=DAYS_WINDOW)
+    events = []
 
-    # ---- Parsing iCal data ----
-    print_status("Parsing iCal data")
-    all_events = parse_events(ical_content)
-    filtered_events = filter_events_by_date(all_events, DAYS_WINDOW)
+    for component in Calendar.from_ical(response.content).walk("VEVENT"):
+        due = component.get("DTSTART")
+        if due is None:
+            continue
+        due_date = due.dt.date() if isinstance(due.dt, datetime) else due.dt
+        if today <= due_date <= cutoff:
+            events.append(
+                {
+                    "title": str(component.get("SUMMARY", "No Title")),
+                    "due_date": due_date,
+                }
+            )
 
-    if not filtered_events:
-        print_status("No events in the next 14 days. Nothing to sync.", YELLOW)
+    return events
+
+
+def get_priority(days_left):
+    if days_left <= 2:
+        return 1
+    if days_left <= 7:
+        return 2
+    return 3
+
+
+def get_labels(title):
+    labels = []
+    if "summative" in title.lower():
+        labels.append("Summative")
+    if "formative" in title.lower():
+        labels.append("Formative")
+    return labels
+
+
+def get_subject(title):
+    first_word = title.split()[0] if title else "General"
+    return first_word.split("(")[0]
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main():
+    start = time.time()
+
+    print_status("Connecting to ManageBac iCal feed...")
+    if not test_api():
+        sys.exit(1)
+
+    print_status(f"Fetching events for the next {DAYS_WINDOW} days...")
+    events = download_events()
+
+    if not events:
+        print_status("No upcoming events found. Nothing to sync.", YELLOW)
         return
 
-    # ---- Prepare for task creation ----
-    print_status("Calculating priority from deadline proximity")
-    tasks_added = 0
-    created_tasks = []  # store (task_name, subject, priority, due_date)
+    created_tasks = []
+    for event in tqdm(events, desc="Creating tasks", unit="task", colour="cyan"):
+        days_left = (event["due_date"] - date.today()).days
+        priority = get_priority(days_left)
+        labels = get_labels(event["title"])
+        due_str = event["due_date"].strftime("%Y-%m-%d")
 
-    # ---- Create tasks with progress bar ----
-    print_status("Creating tasks via Todoist REST API")
-    for event in tqdm(filtered_events, desc="Progress bar", unit="task", colour="cyan"):
-        title = event["title"]
-        due_date = event["due_date"]
-        days = days_until(due_date)
-        priority = assign_priority(days)
-        subject, labels = extract_subject_and_labels(title)
+        if create_task(event["title"], due_str, priority, labels):
+            created_tasks.append(
+                (
+                    event["title"],
+                    get_subject(event["title"]),
+                    priority,
+                    event["due_date"],
+                )
+            )
 
-        due_str = due_date.strftime("%Y-%m-%d")
-        success = create_todoist_task(
-            api_key=TODOIST_API_KEY,
-            content=title,
-            due_date_str=due_str,
-            priority=priority,
-            labels=labels,
-            project_id=TODOIST_PROJECT_ID,
-        )
-        if success:
-            tasks_added += 1
-            created_tasks.append((title, subject, priority, due_date))
-
-    # ---- Linking Google Calendar dates (already done via due_date) ----
-    print_status("Linking Google Calendar dates to tasks", GREEN)
-
-    # ---- Final summary table ----
+    # Print summary table
     print("\n" + "=" * 70)
-    print(f"{'TASK':<45} {'SUBJECT':<10} {'PRI':<5} {'DUE DATE':<12}")
+    print(f"{'TASK':<45} {'SUBJECT':<10} {'PRI':<5} {'DUE DATE'}")
     print("-" * 70)
-    for task_name, subj, prio, ddate in created_tasks:
-        # Colour the priority
-        prio_str = f"{PRIO_COLOUR[prio]}P{prio}{RESET}"
-        # Truncate task name if too long
-        short_name = task_name[:42] + ".." if len(task_name) > 42 else task_name
-        print(f"{short_name:<45} {subj:<10} {prio_str:<5} {ddate.strftime('%Y-%m-%d')}")
+    for title, subject, priority, due_date in created_tasks:
+        short_title = title[:42] + ".." if len(title) > 42 else title
+        priority_str = f"{PRIORITY_COLOUR[priority]}P{priority}{RESET}"
+        print(
+            f"{short_title:<45} {subject:<10} {priority_str:<5} {due_date.strftime('%Y-%m-%d')}"
+        )
     print("=" * 70)
 
-    # ---- Footer ----
-    elapsed = time.time() - start_time
-    print_status(f"Job complete", GREEN)
-    print_status(
-        f"Operation Timeframe: {elapsed:.2f}s ({'sub 10s' if elapsed < 10 else 'over 10s'})"
-    )
+    elapsed = time.time() - start
+    print_status(f"Done! Synced {len(created_tasks)} tasks in {elapsed:.2f}s", GREEN)
     print_status(f"Last synced: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", GREEN)
 
 
