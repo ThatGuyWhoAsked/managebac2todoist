@@ -17,8 +17,8 @@ from tqdm import tqdm
 # =============================================================================
 # CONFIGURATION – REPLACE THESE!
 # =============================================================================
-ICAL_URL = "https://ishamburg.managebac.com/student/events/token/47fdf330-2948-013c-d6a0-067aabdaee26.ics"
-TODOIST_API_KEY = "c4f2fb96f28963ed4efc8a9f523b87fe9c81c57f"
+ICAL_URL = ""
+TODOIST_API_KEY = ""
 DAYS_WINDOW = 14
 TODOIST_PROJECT_ID = None  # Optional: set to a project ID (int)
 
